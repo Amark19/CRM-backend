@@ -1,0 +1,30 @@
+{
+  "name": "opportunities-bulk-move",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "vitest run",
+    "migrate": "tsx src/db/migrate.ts",
+    "typecheck": "tsc",
+    "start": "tsx src/api/server.ts",
+    "dev": "tsx watch src/api/server.ts",
+    "worker": "tsx src/worker/main.ts",
+    "seed": "tsx src/scripts/seed.ts",
+    "bench": "tsx src/scripts/bench.ts"
+  },
+  "private": true,
+  "dependencies": {
+    "express": "^5.2.1",
+    "joi": "^18.2.9",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^3.2.7"
+  }
+}

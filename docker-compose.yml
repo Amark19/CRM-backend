@@ -1,0 +1,61 @@
+x-app: &app
+  build: .
+  environment:
+    DATABASE_URL: postgres://app:app@postgres:5432/opportunities
+    TEST_DATABASE_URL: postgres://app:app@postgres:5432/opportunities_test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: opportunities
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates opportunities_test on first start; tests never share the app's queue.
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d opportunities"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *app
+    command: npm run migrate
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  seed:
+    <<: *app
+    command: npm run seed -- --small
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  api:
+    <<: *app
+    command: npm start
+    ports:
+      - "3000:3000"
+    depends_on:
+      seed: { condition: service_completed_successfully }
+
+  worker:
+    <<: *app
+    command: npm run worker
+    deploy:
+      replicas: 2
+    depends_on:
+      seed: { condition: service_completed_successfully }
+
+  tests:
+    <<: *app
+    command: npm test
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  pgdata:

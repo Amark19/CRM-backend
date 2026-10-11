@@ -1,0 +1,13 @@
+{
+  // Code runs through tsx (no build step); tsc is only the type checker.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src", "test", "vitest.config.ts"]
+}
