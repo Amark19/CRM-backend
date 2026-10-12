@@ -127,8 +127,11 @@ one workspace never run at once (section 5).
   filter, must never be overwritten. Removing the stage guard makes this test fail.
 - 20 truly parallel manual moves of one deal must leave an unbroken transition chain. Removing
   `FOR UPDATE` makes this test fail.
-- **Not directly tested:** a manual move and a chunk hitting the same row at the same instant.
-  That case relies on Postgres's documented READ COMMITTED re-check of the `WHERE` clause.
+- A stress test runs a real worker on 10,000 deals while 200 manual moves hit them concurrently
+  (3 rounds). Every manual move must win, and the test checks that moves landed both before and
+  after the job reached them. Same-instant collisions on one row depend on timing, so this
+  exercises them probabilistically; correctness there rests on Postgres's READ COMMITTED
+  re-check of the `WHERE` clause.
 
 ## 4. Snapshot vs live set
 

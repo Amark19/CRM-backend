@@ -37,7 +37,7 @@ To inspect data: `docker compose exec postgres psql -U app -d opportunities`.
 
 ## Tests
 
-38 tests against a real Postgres, focused on the hard parts:
+41 tests against a real Postgres, focused on the hard parts:
 
 | File | Covers |
 |---|---|
@@ -45,6 +45,7 @@ To inspect data: `docker compose exec postgres psql -U app -d opportunities`.
 | `bulk-chunk.test.ts` | manual moves are never overwritten; filter re-check; resume from the cursor after lease expiry; a "zombie" worker is rejected by the fencing token |
 | `bulk-queue.test.ts` | one running job per workspace, workspaces take turns, failure after retries, pacing |
 | `bulk-kill.test.ts` | a real worker **process** is SIGKILLed mid-job; another one finishes it and the invariants hold |
+| `bulk-race.test.ts` | stress: a real worker moves 10,000 deals while 200 manual moves hit the same deals concurrently, ×3 rounds; every manual move wins, and the race is checked to have happened both ways |
 | `opportunities.test.ts` | Part 1, including 20 parallel moves of one deal keeping an unbroken history |
 
 Each safety mechanism was removed in turn to confirm a test fails without it: the stage guard,
