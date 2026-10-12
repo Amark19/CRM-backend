@@ -11,6 +11,32 @@
 Tables: `bulk_jobs` (one row per job: request, status, counters, cursor, lease) and
 `bulk_job_items` (one row per snapshotted deal: `job_id, opportunity_id, snapshot_stage_id`).
 
+## 0. Technology choices
+
+**No Redis or Kafka.** Every safety property rests on one transaction per chunk: the moved deals,
+their history rows, the job's cursor and its counters commit together. So job state must live in
+Postgres whatever else we add.
+- A broker would carry only "job X is ready", as a second system that can disagree with the
+  database (a job committed but never enqueued, or the reverse).
+- Kafka's strengths (partitioned high-volume streams, replay) don't fit a few bulk jobs a minute.
+- Redis would hold idempotency keys whose durability we'd then have to defend.
+
+Postgres already has what a queue needs: `FOR UPDATE SKIP LOCKED` and `LISTEN/NOTIFY`.
+
+**Delivery semantics.** This is not a broker's push model.
+- `NOTIFY` is a broadcast wake-up: every idle worker hears it and tries to claim.
+- The **claim** (`SKIP LOCKED` + a lease, like an SQS visibility timeout) is the delivery, so
+  exactly one worker owns a job at a time.
+- A dead owner's lease expires and the job is re-claimed. Delivery is therefore
+  **at-least-once**, and processing is idempotent (atomic chunks, cursor, fencing token, a guard
+  that can't move a deal twice), so the **effect is exactly-once per deal**.
+- `NOTIFY` is fire-and-forget, so it only cuts latency. A 2s idle poll guarantees pickup.
+
+**Raw SQL, no ORM.** The core is a few statements whose locking matters: a guarded
+`UPDATE … FROM … RETURNING` inside a data-modifying CTE, and `SKIP LOCKED`. An ORM would split
+them into several round trips held inside one transaction, which means longer row locks, and it
+would hide exactly what each statement locks.
+
 ## 1. Chunking and the cursor
 
 At submit, the matching ids are frozen into `bulk_job_items` with one `INSERT … SELECT`. That
@@ -37,13 +63,12 @@ therefore can never be ahead of or behind the data. A crash mid-chunk rolls the 
 back, and the cursor still points at the end of the last committed chunk.
 
 **Alternatives considered:**
-- *All ids in one array column:* about 6× smaller on disk and faster to write, but every chunk
-  would unpack the whole array (about 8 MB per chunk at 500k).
-- *One row per chunk holding an id array:* small and flat per chunk, but the chunk size is fixed
-  at submit and the SQL is less plain.
+- *All ids in one array column:* about 6× smaller, but every chunk would unpack the whole array
+  (≈8 MB per chunk at 500k).
+- *One row per chunk holding an id array:* small, but the chunk size is fixed at submit.
 
-The item table costs about 100 bytes per deal (≈5 MB for 50k). It is temporary, and its
-per-chunk cost does not grow with the job size.
+The item table costs ≈100 bytes per deal (≈5 MB for 50k), and its per-chunk cost does not grow
+with the job size.
 
 ## 2. Idempotency
 
@@ -97,6 +122,14 @@ moved by the job, because its current state matches what was requested.
 **Deadlocks.** A manual move locks one row, so it cannot deadlock with a chunk. Two bulk jobs in
 one workspace never run at once (section 5).
 
+**How this is tested.**
+- Manual moves made between chunks, before and after the cursor, with and without a stage in the
+  filter, must never be overwritten. Removing the stage guard makes this test fail.
+- 20 truly parallel manual moves of one deal must leave an unbroken transition chain. Removing
+  `FOR UPDATE` makes this test fail.
+- **Not directly tested:** a manual move and a chunk hitting the same row at the same instant.
+  That case relies on Postgres's documented READ COMMITTED re-check of the `WHERE` clause.
+
 ## 4. Snapshot vs live set
 
 We act on the **snapshot**: the deals matching the filter at submit time. Each deal is then
@@ -131,14 +164,18 @@ The mechanisms, all implemented:
 
 Claiming uses `FOR UPDATE SKIP LOCKED` with a 30s lease. Each claim increments `lease_epoch`, and
 every chunk first checks `lease_epoch = mine` (`FOR UPDATE` on the job row). A worker that froze
-past its lease and was replaced writes nothing. Workers wake on `LISTEN/NOTIFY` and poll every 2s
-to pick up jobs whose worker died.
+past its lease and was replaced writes nothing.
 
 **The hole it leaves.**
 - Every workspace shares Postgres's CPU, disk bandwidth, WAL and autovacuum. A large job in one
   workspace still consumes them.
 - Pacing is a fixed rate, not adaptive to actual database load, so a busy database gets the same
   bulk write rate as an idle one.
+- Turns are ordered per **job**, not per workspace. When a workspace's job finishes, its next job
+  starts with `last_served_at = NULL` and goes ahead of the others for one slice. The fix is to
+  order by the workspace's last-served time.
+- One job per workspace trades throughput for isolation. Spare workers stay idle rather than help
+  a workspace that has several jobs queued.
 
 ## 6. Resumability
 
@@ -180,6 +217,12 @@ Once resumed, the counters continue from 30,000; they never reset or double-coun
 4. **Fixed pacing.** A fixed rate is either too slow for quiet periods or too aggressive for busy
    ones.
    **Fix:** adaptive pacing driven by interactive p99 or database load.
+5. **Many workers.** Each worker holds 3 connections, so 100 workers need 300, which is above
+   Postgres's default `max_connections` of 100. Every idle worker also wakes on each `NOTIFY`
+   (N claim queries per job, one of which wins) and polls every 2s.
+   **Fix:** PgBouncer for the pooled connections (LISTEN needs a direct connection), a longer idle
+   poll, and beyond that a broker for one-consumer delivery, with Postgres remaining the source of
+   truth for job state.
 
 ## 8. Another week, ranked
 

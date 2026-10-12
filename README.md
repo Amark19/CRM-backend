@@ -33,6 +33,27 @@ npm run typecheck
 Tests run against a separate `opportunities_test` database (created on first
 Postgres start by `docker/initdb`), so running workers never pick up test jobs.
 
+To inspect data: `docker compose exec postgres psql -U app -d opportunities`.
+
+## Tests
+
+38 tests against a real Postgres, focused on the hard parts:
+
+| File | Covers |
+|---|---|
+| `bulk-submit.test.ts` | idempotency: replay, 10 truly concurrent identical requests produce one job, same key with a different body returns 422, keys are per workspace; the 50,000 cap; tenant scoping; progress health |
+| `bulk-chunk.test.ts` | manual moves are never overwritten; filter re-check; resume from the cursor after lease expiry; a "zombie" worker is rejected by the fencing token |
+| `bulk-queue.test.ts` | one running job per workspace, workspaces take turns, failure after retries, pacing |
+| `bulk-kill.test.ts` | a real worker **process** is SIGKILLed mid-job; another one finishes it and the invariants hold |
+| `opportunities.test.ts` | Part 1, including 20 parallel moves of one deal keeping an unbroken history |
+
+Each safety mechanism was removed in turn to confirm a test fails without it: the stage guard,
+the `lease_epoch` fence, `FOR UPDATE` on manual moves, and the one-job-per-workspace rule.
+
+Postgres logs a few `violates foreign key constraint` errors during the run. They are expected:
+they come from the tests that deliberately use another workspace's stage, which the composite
+foreign key rejects (the API returns 422).
+
 ## API
 
 Every request needs `X-Workspace-Id`. There is no auth.
@@ -96,3 +117,4 @@ Bulk filter fields (all optional, at least one): `stageId`, `ownerId`,
   matters; they're written and reviewed as SQL.
 - **PostgreSQL, no Redis/Kafka.** Postgres is both the store and the job queue
   (`FOR UPDATE SKIP LOCKED`, `LISTEN/NOTIFY`), so job state, cursor and data commit together.
+  Full reasoning in DESIGN.md §0.
