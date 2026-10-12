@@ -19,7 +19,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function startWorkers(): ChildProcess[] {
   return Array.from({ length: WORKERS }, () =>
-    spawn('npx', ['tsx', 'src/worker/main.ts'], { stdio: 'ignore', env: process.env }),
+    spawn(process.execPath, ['--import','tsx', 'src/worker/main.ts'], { stdio: 'ignore', env: process.env }),
   );
 }
 
