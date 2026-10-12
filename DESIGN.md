@@ -23,6 +23,31 @@ Postgres whatever else we add.
 
 Postgres already has what a queue needs: `FOR UPDATE SKIP LOCKED` and `LISTEN/NOTIFY`.
 
+**Why not a message queue (RabbitMQ/SQS) either.** A queue delivers messages; it does not make
+progress resumable.
+- A 50k job is not one message but 50 dependent chunks sharing a cursor. The cursor and counters
+  would still need a durable, transactional home (Postgres).
+- The job is a pure database update, so there is no external work to decouple: the worker's
+  write and the job's bookkeeping belong in the same transaction.
+- A queue would add enqueue-after-commit races and a second store to monitor, for no gain at
+  this volume.
+
+**When a queue becomes the right tool.**
+- When the move has side effects **outside** the database: webhooks, emails, CRM automation
+  triggers, calls to external APIs. These can't join a database transaction, they're slow and
+  they fail independently, so they need retries, backoff and dead-lettering. A broker is built
+  for that.
+- When several consumers react to the same event (fan-out).
+- At very high worker counts (see §7).
+
+The pattern then would be a **transactional outbox**:
+1. Each chunk also inserts its "deal moved" events into an `outbox` table, in the same
+   transaction.
+2. A relay publishes the outbox rows to the broker.
+3. Consumers are idempotent on the event id, because delivery is at-least-once.
+
+Postgres would stay the source of truth for the move itself.
+
 **Delivery semantics.** This is not a broker's push model.
 - `NOTIFY` is a broadcast wake-up: every idle worker hears it and tries to claim.
 - The **claim** (`SKIP LOCKED` + a lease, like an SQS visibility timeout) is the delivery, so
