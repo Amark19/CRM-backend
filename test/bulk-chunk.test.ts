@@ -76,6 +76,25 @@ describe('processChunk', () => {
     expect(await verifyJob(pool, view.id)).toEqual([]);
   });
 
+  // With a stage in the filter, the filter re-check alone would catch a manual
+  // move. Without one, only `o.stage_id = c.snapshot_stage_id` protects it:
+  // this test fails if that guard is removed.
+  it('never overwrites a manual move when the filter does not name a stage', async () => {
+    const ids = await seedOpportunities(pool, ws.workspaceId, A, 300, { ownerId: 'priya' });
+    const view = (await submitBulkMove(pool, ws.workspaceId, 'k', { filter: { ownerId: 'priya' }, targetStageId: B }))
+      .job;
+    const job = (await claimJob(pool, 30))!;
+
+    await processChunk(pool, job, 100, 30);
+    const aheadOfCursor = ids.slice(200, 210);
+    for (const id of aheadOfCursor) await moveOpportunity(pool, ws.workspaceId, id, C);
+    await runToCompletion(job, 100);
+
+    for (const id of aheadOfCursor) expect(await stageOf(id)).toBe(C);
+    expect(await jobState(view.id)).toMatchObject({ moved: 290, skipped: 10 });
+    expect(await verifyJob(pool, view.id)).toEqual([]);
+  });
+
   it('skips a deal that no longer matches the filter', async () => {
     const ids = await seedOpportunities(pool, ws.workspaceId, A, 5);
     const view = (
