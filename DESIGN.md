@@ -38,7 +38,7 @@ progress resumable.
   they fail independently, so they need retries, backoff and dead-lettering. A broker is built
   for that.
 - When several consumers react to the same event (fan-out).
-- At very high worker counts (see §7).
+- At very high worker counts (see https://github.com/Amark19/CRM-backend/blob/main/DESIGN.md#7-what-breaks-at-10-500k-deal-move-20m-opportunities).
 
 The pattern then would be a **transactional outbox**:
 1. Each chunk also inserts its "deal moved" events into an `outbox` table, in the same
